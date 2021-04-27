@@ -178,7 +178,7 @@ def evaluate(answers, predictions, skip_no_answer=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_path', type=str, help='path to evaluation dataset')
+    parser.add_argument('--dataset_path', type=str, help='path to evaluation dataset', default="./datasets/newsqa_dev.jsonl.gz")
     parser.add_argument('--output_path', type=str, help='path to output predictions')
     parser.add_argument('--skip_no_answer', action='store_true')
     args = parser.parse_args()

@@ -29,6 +29,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import random
 from tqdm import tqdm
 
 from data import QADataset, Tokenizer, Vocabulary
@@ -49,151 +50,35 @@ parser = argparse.ArgumentParser()
 
 # Training arguments.
 parser.add_argument('--device', type=int)
-parser.add_argument(
-    '--use_gpu',
-    action='store_true',
-    help='whether to use GPU',
-)
-parser.add_argument(
-    '--model',
-    type=str,
-    required=True,
-    choices=['baseline'],
-    help='which model to use',
-)
-parser.add_argument(
-    '--model_path',
-    type=str,
-    required=True,
-    help='path to load/save model checkpoints',
-)
-parser.add_argument(
-    '--embedding_path',
-    type=str,
-    default='glove/glove.6B.300d.txt',
-    help='GloVe embedding path',
-)
-parser.add_argument(
-    '--train_path',
-    type=str,
-    required=True,
-    help='training dataset path',
-)
-parser.add_argument(
-    '--dev_path',
-    type=str,
-    required=True,
-    help='dev dataset path',
-)
-parser.add_argument(
-    '--max_context_length',
-    type=int,
-    default=384,
-    help='maximum context length (do not change!)',
-)
-parser.add_argument(
-    '--max_question_length',
-    type=int,
-    default=64,
-    help='maximum question length (do not change!)',
-)
-parser.add_argument(
-    '--output_path',
-    type=str,
-    required=False,
-    help='predictions output path',
-)
-parser.add_argument(
-    '--shuffle_examples',
-    action='store_true',
-    help='shuffle training example at the beginning of each epoch',
-)
+parser.add_argument('--use_gpu', action='store_true', help='whether to use GPU', default=True)
+parser.add_argument('--model', type=str, default="baseline", choices=['baseline'], help='which model to use')
+parser.add_argument('--pretrained_model_path', type=str, default="models/baseline_small_squad.pt", help='path to pretrained weights')
+parser.add_argument('--embedding_path', type=str, default='glove/glove.6B.300d.txt', help='GloVe embedding path')
+parser.add_argument('--train_path', type=str, default="./datasets/newsqa_train.jsonl.gz", help='training dataset path')
+parser.add_argument('--dev_path', type=str, default="datasets/newsqa_dev.jsonl.gz", help='dev dataset path')
+parser.add_argument('--max_context_length', type=int, default=384, help='maximum context length (do not change!)')
+parser.add_argument('--max_question_length', type=int, default=64, help='maximum question length (do not change!)')
+parser.add_argument('--output_path', type=str, required=False, help='predictions output path')
+parser.add_argument('--shuffle_examples', action='store_true', help='shuffle training example at the beginning of each epoch')
 
 # Optimization arguments.
-parser.add_argument(
-    '--epochs',
-    type=int,
-    default=10,
-    help='number of training epochs',
-)
-parser.add_argument(
-    '--batch_size',
-    type=int,
-    default=64,
-    help='training and evaluation batch size',
-)
-parser.add_argument(
-    '--learning_rate',
-    type=float,
-    default=1e-3,
-    help='training learning rate',
-)
-parser.add_argument(
-    '--weight_decay',
-    type=float,
-    default=0.,
-    help='training weight decay',
-)
-parser.add_argument(
-    '--grad_clip',
-    type=float,
-    default=0.5,
-    help='gradient norm clipping value',
-)
-parser.add_argument(
-    '--early_stop',
-    type=int,
-    default=3,
-    help='number of epochs to wait until early stopping',
-)
-parser.add_argument(
-    '--do_train',
-    action='store_true',
-    help='flag to enable training',
-)
-parser.add_argument(
-    '--do_test',
-    action='store_true',
-    help='flag to enable testing',
-)
+parser.add_argument('--epochs', type=int, default=10, help='number of training epochs')
+parser.add_argument('--batch_size', type=int, default=64, help='training and evaluation batch size')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='training learning rate')
+parser.add_argument('--weight_decay', type=float, default=0., help='training weight decay')
+parser.add_argument('--grad_clip', type=float, default=0.5, help='gradient norm clipping value')
+parser.add_argument('--early_stop', type=int, default=3, help='number of epochs to wait until early stopping')
+parser.add_argument( '--do_train', action='store_true', help='flag to enable training')
+parser.add_argument('--do_test', action='store_true', help='flag to enable testing', default=True)
 
 # Model arguments.
-parser.add_argument(
-    '--vocab_size',
-    type=int,
-    default=50000,
-    help='vocabulary size (dynamically set, do not change!)',
-)
-parser.add_argument(
-    '--embedding_dim',
-    type=int,
-    default=300,
-    help='embedding dimension',
-)
-parser.add_argument(
-    '--hidden_dim',
-    type=int,
-    default=256,
-    help='hidden state dimension',
-)
-parser.add_argument(
-    '--rnn_cell_type',
-    choices=['lstm', 'gru'],
-    default='lstm',
-    help='Type of RNN cell',
-)
-parser.add_argument(
-    '--bidirectional',
-    action='store_true',
-    help='use bidirectional RNN',
-)
-parser.add_argument(
-    '--dropout',
-    type=float,
-    default=0.,
-    help='dropout on passage and question vectors',
-)
-
+parser.add_argument('--vocab_size', type=int, default=50000, help='vocabulary size (dynamically set, do not change!)')
+parser.add_argument('--embedding_dim', type=int, default=300, help='embedding dimension')
+parser.add_argument('--hidden_dim', type=int, default=128, help='hidden state dimension')
+parser.add_argument('--hidden_data_ratio', type=float, default=0.0, help='ratio of hidden y-values')
+parser.add_argument('--rnn_cell_type', choices=['lstm', 'gru'], default='lstm', help='Type of RNN cell')
+parser.add_argument('--bidirectional', action='store_true', default=True, help='use bidirectional RNN')
+parser.add_argument('--dropout', type=float, default=0., help='dropout on passage and question vectors')
 
 def _print_arguments(args):
     """Pretty prints command line args to stdout.
@@ -244,6 +129,17 @@ def _early_stop(args, eval_history):
         and not any(eval_history[-args.early_stop:])
     )
 
+def _precent_hide_labels(data, hidden_data_ratio):
+    samples_hidden = 0
+    for i in range(0, len(data)):
+
+        if random.random() < hidden_data_ratio:
+            samples_hidden += 1
+            data.samples[i] = tuple([data.samples[i][0], data.samples[i][1], data.samples[i][2], -1, -1])
+
+    print(str(samples_hidden) + " / " + str(len(data)) + " y-values hidden.")
+    return data
+
 
 def _calculate_loss(
     start_logits, end_logits, start_positions, end_positions
@@ -264,7 +160,10 @@ def _calculate_loss(
     """
     # If the gold span is outside the scope of the maximum
     # context length, then ignore these indices when computing the loss.
+
     ignored_index = start_logits.size(1)
+    start_positions[start_positions == -1] = ignored_index
+    end_positions[end_positions == -1] = ignored_index
     start_positions.clamp_(0, ignored_index)
     end_positions.clamp_(0, ignored_index)
 
@@ -322,6 +221,7 @@ def train(args, epoch, model, dataset):
             batch['start_positions'],
             batch['end_positions'],
         )
+
         loss.backward()
         if args.grad_clip > 0.:
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
@@ -385,7 +285,7 @@ def evaluate(args, epoch, model, dataset):
     return eval_loss / eval_steps
 
 
-def write_predictions(args, model, dataset):
+def write_predictions(args, model, model_path, predictions_path, dataset):
     """
     Writes model predictions to an output file. The official QA metrics (EM/F1)
     can be computed using `evaluation.py`. 
@@ -397,7 +297,7 @@ def write_predictions(args, model, dataset):
             official test datasets are blind and hosted by official servers).
     """
     # Load model checkpoint.
-    model.load_state_dict(torch.load(args.model_path, map_location='cpu'))
+    model.load_state_dict(torch.load(model_path, map_location='cpu'))
     model.eval()
 
     # Set up test dataloader.
@@ -438,7 +338,7 @@ def write_predictions(args, model, dataset):
                 outputs.append({'qid': qid, 'answer': pred_span})
 
     # Write predictions to output file.
-    with open(args.output_path, 'w+') as f:
+    with open(predictions_path, 'w+') as f:
         for elem in outputs:
             f.write(f'{json.dumps(elem)}\n')
 
@@ -455,6 +355,10 @@ def main(args):
     _print_arguments(args)
     print()
 
+    path_base = "baseline_w_hdr_" + str(args.hidden_data_ratio)
+    model_path = "./models/" + path_base + ".pt"
+    predictions_path = "./predictions/" + path_base + ".txt"
+
     # Check if GPU is available.
     if not args.use_gpu and torch.cuda.is_available():
         print('warning: GPU is available but args.use_gpu = False')
@@ -462,6 +366,7 @@ def main(args):
 
     # Set up datasets.
     train_dataset = QADataset(args, args.train_path)
+    train_dataset = _precent_hide_labels(train_dataset, args.hidden_data_ratio)
     dev_dataset = QADataset(args, args.dev_path)
 
     # Create vocabulary and tokenizer.
@@ -491,6 +396,9 @@ def main(args):
     )
     print()
 
+    model.load_state_dict(torch.load(args.pretrained_model_path))
+    torch.save(model.state_dict(), model_path)
+
     if args.use_gpu:
         model = cuda(args, model)
 
@@ -502,7 +410,7 @@ def main(args):
     if args.do_train:
         # Track training statistics for checkpointing.
         eval_history = []
-        best_eval_loss = float('inf')
+        best_eval_loss = evaluate(args, 0, model, dev_dataset)
 
         # Begin training.
         for epoch in range(1, args.epochs + 1):
@@ -515,7 +423,7 @@ def main(args):
             eval_history.append(eval_loss < best_eval_loss)
             if eval_loss < best_eval_loss:
                 best_eval_loss = eval_loss
-                torch.save(model.state_dict(), args.model_path)
+                torch.save(model.state_dict(), model_path)
             
             print(
                 f'epoch = {epoch} | '
@@ -537,14 +445,13 @@ def main(args):
     if args.do_test:
         # Write predictions to the output file. Use the printed command
         # below to obtain official EM/F1 metrics.
-        write_predictions(args, model, dev_dataset)
+        write_predictions(args, model, model_path, predictions_path, dev_dataset)
         eval_cmd = (
             'python3 evaluate.py '
-            f'--dataset_path {args.dev_path} '
-            f'--output_path {args.output_path}'
+            f'--output_path {predictions_path}'
         )
         print()
-        print(f'predictions written to \'{args.output_path}\'')
+        print(f'predictions written to \'{predictions_path}\'')
         print(f'compute EM/F1 with: \'{eval_cmd}\'')
         print()
 

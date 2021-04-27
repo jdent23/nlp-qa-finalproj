@@ -3,5 +3,6 @@ __pycache__/
 datasets/
 glove/
 venv/
+predictions/
 *.pt
 *.jsonl.gz
